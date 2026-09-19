@@ -1,107 +1,120 @@
--- EduTrack Data Audit — 12 queries
--- Target table: enrollments
+-- EduTrack Data Audit — Related Tables
+-- Target schema: students, courses, enrollments (normalized)
+-- Every query uses at least one JOIN. No subqueries.
+-- ON DELETE CASCADE is course theory only — not used here. FKs are
+-- REFERENCES students(id) / courses(id) with the default NO ACTION.
 
 -- ============================================================
--- Queries — Reading and Filtering
+-- Queries — INNER JOIN
 -- ============================================================
 
--- 1. List all enrollments for 'Intro to Python'
-SELECT student_name, student_email, completion_percentage
-FROM enrollments
-WHERE course_title = 'Intro to Python';
+-- 1. Every enrollment with student name, course title, and completion
+SELECT
+  s.name AS student_name,
+  c.title AS course_title,
+  e.completion_percentage
+FROM enrollments AS e
+INNER JOIN students AS s ON e.student_id = s.id
+INNER JOIN courses AS c ON e.course_id = c.id
+ORDER BY s.name, c.title;
 
--- 2. Enrollments where completion_percentage is less than 10 (potential dropouts)
-SELECT *
-FROM enrollments
-WHERE completion_percentage < 10;
+-- 2. Students who passed at least one course (name, email, course title)
+SELECT
+  s.name,
+  s.email,
+  c.title AS course_title
+FROM enrollments AS e
+INNER JOIN students AS s ON e.student_id = s.id
+INNER JOIN courses AS c ON e.course_id = c.id
+WHERE e.passed = TRUE
+ORDER BY s.name, c.title;
 
--- 3. Enrollments where instructor is NULL
-SELECT *
-FROM enrollments
-WHERE instructor IS NULL;
-
--- 4. Five students with the highest completion_percentage who have not yet passed
-SELECT student_name, student_email, course_title, completion_percentage, passed
-FROM enrollments
-WHERE passed = false
-ORDER BY completion_percentage DESC
-LIMIT 5;
-
--- 5. Enrollments created in the last year, newest first
-SELECT *
-FROM enrollments
-WHERE enrollment_date >= CURRENT_DATE - INTERVAL '1 year'
-ORDER BY enrollment_date DESC;
-
--- ============================================================
--- Queries — Data Corrections
--- Confirm with SELECT before UPDATE/DELETE.
--- ============================================================
-
--- 6. INSERT the missing enrollment from the edutrack.sql comments (id = 18)
-INSERT INTO enrollments (
-  id,
-  student_id,
-  student_name,
-  student_email,
-  course_id,
-  course_title,
-  category,
-  enrollment_date,
-  completion_percentage,
-  passed,
-  monthly_fee_paid,
-  instructor
-) VALUES (
-  18,
-  3,
-  'Lucia Fernandes',
-  'lucia.fernandes@student.edutrack.com',
-  5,
-  'Advanced Python',
-  'Programming',
-  '2025-04-01',
-  0,
-  false,
-  69.99,
-  'Carlos Vega'
-);
-
--- 7. UPDATE NULL instructor values
--- Preview: SELECT * FROM enrollments WHERE instructor IS NULL;
-UPDATE enrollments
-SET instructor = 'Pending assignment'
-WHERE instructor IS NULL;
-
--- 8. DELETE enrollments for imported @test.com accounts
--- Preview: SELECT * FROM enrollments WHERE student_email ILIKE '%@test.com';
-DELETE FROM enrollments
-WHERE student_email ILIKE '%@test.com';
+-- 3. Average completion percentage per instructor, highest to lowest
+SELECT
+  c.instructor_name,
+  AVG(e.completion_percentage) AS avg_completion_percentage
+FROM enrollments AS e
+INNER JOIN courses AS c ON e.course_id = c.id
+GROUP BY c.instructor_name
+ORDER BY avg_completion_percentage DESC;
 
 -- ============================================================
--- Queries — Aggregation and Reporting
+-- Queries — LEFT JOIN (detecting missing data)
 -- ============================================================
 
--- 9. Count enrollments grouped by category
-SELECT category, COUNT(*) AS enrollment_count
-FROM enrollments
-GROUP BY category
-ORDER BY enrollment_count DESC;
+-- 4. Students with no enrollments
+SELECT
+  s.id,
+  s.name,
+  s.email,
+  s.signup_date
+FROM students AS s
+LEFT JOIN enrollments AS e ON s.id = e.student_id
+WHERE e.id IS NULL;
 
--- 10. Average completion_percentage grouped by course_title, lowest to highest
-SELECT course_title, AVG(completion_percentage) AS avg_completion_percentage
-FROM enrollments
-GROUP BY course_title
-ORDER BY avg_completion_percentage ASC;
+-- 5. Courses with no enrollments
+SELECT
+  c.id,
+  c.title,
+  c.category,
+  c.instructor_name,
+  c.monthly_fee
+FROM courses AS c
+LEFT JOIN enrollments AS e ON c.id = e.course_id
+WHERE e.id IS NULL;
 
--- 11. Courses with more than 3 enrollments
-SELECT course_title, COUNT(*) AS enrollment_count
-FROM enrollments
-GROUP BY course_title
-HAVING COUNT(*) > 3;
+-- ============================================================
+-- Queries — Aggregation across tables
+-- ============================================================
 
--- 12. Total revenue (SUM of monthly_fee_paid) by category, highest to lowest
-SELECT category, SUM(monthly_fee_paid) AS total_revenue
-FROM enrollments
-GROUP BY category
+-- 6. Students enrolled in more than one course
+SELECT
+  s.name,
+  COUNT(e.id) AS course_count
+FROM students AS s
+INNER JOIN enrollments AS e ON s.id = e.student_id
+GROUP BY s.id, s.name
+HAVING COUNT(e.id) > 1
+ORDER BY course_count DESC, s.name;
+
+-- 7. Total revenue per category using courses.monthly_fee
+SELECT
+  c.category,
+  SUM(c.monthly_fee) AS total_revenue
+FROM enrollments AS e
+INNER JOIN courses AS c ON e.course_id = c.id
+GROUP BY c.category
 ORDER BY total_revenue DESC;
+
+-- 8. Instructors and enrollment seats in their courses (COUNT of join rows)
+SELECT
+  c.instructor_name,
+  COUNT(e.id) AS student_count
+FROM enrollments AS e
+INNER JOIN courses AS c ON e.course_id = c.id
+GROUP BY c.instructor_name
+ORDER BY student_count DESC, c.instructor_name;
+
+-- ============================================================
+-- Queries — Data integrity
+-- ============================================================
+
+-- 9. Enrollments whose student_id does not match any student
+SELECT
+  e.id,
+  e.student_id,
+  e.course_id,
+  e.enrollment_date
+FROM enrollments AS e
+LEFT JOIN students AS s ON e.student_id = s.id
+WHERE s.id IS NULL;
+
+-- 10. Enrollments whose course_id does not match any course
+SELECT
+  e.id,
+  e.student_id,
+  e.course_id,
+  e.enrollment_date
+FROM enrollments AS e
+LEFT JOIN courses AS c ON e.course_id = c.id
+WHERE c.id IS NULL;
